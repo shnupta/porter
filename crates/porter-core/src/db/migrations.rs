@@ -71,6 +71,9 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Add integration_id to tasks (old DBs had skill_id instead)
+    add_column_if_missing(pool, "tasks", "integration_id", "TEXT").await?;
+
     // Add columns to agent_sessions (idempotent for existing DBs)
     add_column_if_missing(pool, "agent_sessions", "claude_session_id", "TEXT").await?;
     add_column_if_missing(pool, "agent_sessions", "working_directory", "TEXT").await?;

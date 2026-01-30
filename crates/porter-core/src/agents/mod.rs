@@ -4,19 +4,30 @@ use crate::models::{AgentSession, AgentStatus};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 
-/// Max time to wait for a Claude subprocess (including MCP server startup).
+/// Max time to wait for the first output line (covers MCP server startup).
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Max total time for a Claude subprocess after startup.
 const SESSION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Events emitted by an agent session.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
-    Output { session_id: String, content: String },
-    StatusChanged { session_id: String, status: AgentStatus },
+    Output {
+        session_id: String,
+        content: String,
+        content_type: String,
+    },
+    StatusChanged {
+        session_id: String,
+        status: AgentStatus,
+    },
 }
 
 /// Options for starting a new agent session.
@@ -34,6 +45,7 @@ pub struct AgentManager {
     default_model: String,
     mcp_servers: HashMap<String, McpServerConfig>,
     event_tx: broadcast::Sender<AgentEvent>,
+    cancel_senders: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
 }
 
 impl AgentManager {
@@ -52,6 +64,7 @@ impl AgentManager {
             default_model,
             mcp_servers,
             event_tx,
+            cancel_senders: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -98,6 +111,13 @@ impl AgentManager {
         let working_directory = session.working_directory.clone();
         let skip_permissions = session.dangerously_skip_permissions;
 
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        self.cancel_senders
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), cancel_tx);
+        let cancel_senders = self.cancel_senders.clone();
+
         tokio::spawn(async move {
             let result = run_claude_session(
                 &claude_binary,
@@ -108,8 +128,11 @@ impl AgentManager {
                 skip_permissions,
                 &db,
                 &event_tx,
+                cancel_rx,
             )
             .await;
+
+            cancel_senders.lock().unwrap().remove(&session_id);
 
             let final_status = match result {
                 Ok(()) => AgentStatus::Completed,
@@ -166,6 +189,13 @@ impl AgentManager {
         let working_directory = session.working_directory.clone();
         let skip_permissions = session.dangerously_skip_permissions;
 
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        self.cancel_senders
+            .lock()
+            .unwrap()
+            .insert(porter_session_id.clone(), cancel_tx);
+        let cancel_senders = self.cancel_senders.clone();
+
         tokio::spawn(async move {
             let result = resume_claude_session(
                 &claude_binary,
@@ -177,8 +207,11 @@ impl AgentManager {
                 skip_permissions,
                 &db,
                 &event_tx,
+                cancel_rx,
             )
             .await;
+
+            cancel_senders.lock().unwrap().remove(&porter_session_id);
 
             let final_status = match result {
                 Ok(()) => AgentStatus::Completed,
@@ -208,6 +241,17 @@ impl AgentManager {
     /// Get a specific session by ID.
     pub async fn get_session(&self, id: &str) -> Result<Option<AgentSession>> {
         self.db.get_agent_session(id).await
+    }
+
+    /// Cancel a running session by killing its subprocess.
+    pub async fn cancel_session(&self, id: &str) -> Result<bool> {
+        let cancel_tx = self.cancel_senders.lock().unwrap().remove(id);
+        if let Some(tx) = cancel_tx {
+            let _ = tx.send(());
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Delete a session and its messages.
@@ -336,13 +380,33 @@ async fn process_stream(
     let mut reader = BufReader::new(stdout).lines();
     let mut accumulated_text = String::new();
     let mut claude_session_id: Option<String> = None;
+    let mut block_types: HashMap<u64, String> = HashMap::new();
+    let mut first_event = true;
 
-    while let Some(line) = reader.next_line().await? {
+    loop {
+        // Apply a short startup timeout for the first event (covers MCP server init).
+        // After that, rely on the outer SESSION_TIMEOUT for the full run.
+        let line = if first_event {
+            match tokio::time::timeout(STARTUP_TIMEOUT, reader.next_line()).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    anyhow::bail!(
+                        "No output within {} seconds — MCP server may have failed to start",
+                        STARTUP_TIMEOUT.as_secs()
+                    );
+                }
+            }
+        } else {
+            reader.next_line().await?
+        };
+
+        let Some(line) = line else { break };
         let parsed: serde_json::Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(_) => continue,
         };
 
+        first_event = false;
         let event_type = parsed["type"].as_str().unwrap_or("");
 
         match event_type {
@@ -376,20 +440,69 @@ async fn process_stream(
                                 let _ = event_tx.send(AgentEvent::Output {
                                     session_id: session_id.to_string(),
                                     content: text.to_string(),
+                                    content_type: "text".to_string(),
                                 });
                             }
                         }
                     }
                 }
             }
+            "content_block_start" => {
+                if let Some(index) = parsed["index"].as_u64() {
+                    let block_type = parsed["content_block"]["type"]
+                        .as_str()
+                        .unwrap_or("text")
+                        .to_string();
+                    block_types.insert(index, block_type.clone());
+
+                    // For tool_use blocks, broadcast the tool name immediately
+                    if block_type == "tool_use" {
+                        if let Some(name) = parsed["content_block"]["name"].as_str() {
+                            let _ = event_tx.send(AgentEvent::Output {
+                                session_id: session_id.to_string(),
+                                content: name.to_string(),
+                                content_type: "tool_use".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
             "content_block_delta" => {
-                // Streaming text deltas
-                if let Some(text) = parsed["delta"]["text"].as_str() {
-                    accumulated_text.push_str(text);
-                    let _ = event_tx.send(AgentEvent::Output {
-                        session_id: session_id.to_string(),
-                        content: text.to_string(),
-                    });
+                let index = parsed["index"].as_u64().unwrap_or(0);
+                let block_type = block_types
+                    .get(&index)
+                    .map(|s| s.as_str())
+                    .unwrap_or("text");
+
+                match block_type {
+                    "thinking" => {
+                        if let Some(text) = parsed["delta"]["thinking"].as_str() {
+                            let _ = event_tx.send(AgentEvent::Output {
+                                session_id: session_id.to_string(),
+                                content: text.to_string(),
+                                content_type: "thinking".to_string(),
+                            });
+                        }
+                    }
+                    "tool_use" => {
+                        // Skip input_json_delta — tool input JSON isn't useful to display
+                    }
+                    _ => {
+                        // text deltas
+                        if let Some(text) = parsed["delta"]["text"].as_str() {
+                            accumulated_text.push_str(text);
+                            let _ = event_tx.send(AgentEvent::Output {
+                                session_id: session_id.to_string(),
+                                content: text.to_string(),
+                                content_type: "text".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            "content_block_stop" => {
+                if let Some(index) = parsed["index"].as_u64() {
+                    block_types.remove(&index);
                 }
             }
             "result" => {
@@ -400,6 +513,7 @@ async fn process_stream(
                         let _ = event_tx.send(AgentEvent::Output {
                             session_id: session_id.to_string(),
                             content: text.to_string(),
+                            content_type: "text".to_string(),
                         });
                     }
                 }
@@ -425,22 +539,28 @@ async fn drain_stderr(child: &mut tokio::process::Child, session_id: &str) {
     }
 }
 
-/// Run a Claude subprocess with a timeout. Kills the process if it exceeds
-/// the deadline (e.g. if an MCP server hangs during startup).
+/// Run a Claude subprocess with a timeout and cancellation support.
 async fn run_with_timeout(
     child: &mut tokio::process::Child,
     session_id: &str,
     event_tx: &broadcast::Sender<AgentEvent>,
+    cancel_rx: oneshot::Receiver<()>,
 ) -> Result<(String, Option<String>)> {
-    match tokio::time::timeout(SESSION_TIMEOUT, process_stream(child, session_id, event_tx)).await {
-        Ok(result) => result,
-        Err(_) => {
-            tracing::error!(session_id = %session_id, "Claude session timed out, killing process");
+    tokio::select! {
+        result = tokio::time::timeout(SESSION_TIMEOUT, process_stream(child, session_id, event_tx)) => {
+            match result {
+                Ok(inner) => inner,
+                Err(_) => {
+                    tracing::error!(session_id = %session_id, "Claude session timed out, killing process");
+                    let _ = child.kill().await;
+                    anyhow::bail!("Session timed out after {} seconds", SESSION_TIMEOUT.as_secs());
+                }
+            }
+        }
+        _ = cancel_rx => {
+            tracing::info!(session_id = %session_id, "Session cancelled, killing process");
             let _ = child.kill().await;
-            anyhow::bail!(
-                "Session timed out after {} seconds (MCP server may have failed to start)",
-                SESSION_TIMEOUT.as_secs()
-            );
+            anyhow::bail!("Session was cancelled");
         }
     }
 }
@@ -455,6 +575,7 @@ async fn run_claude_session(
     skip_permissions: bool,
     db: &Database,
     event_tx: &broadcast::Sender<AgentEvent>,
+    cancel_rx: oneshot::Receiver<()>,
 ) -> Result<()> {
     db.add_agent_message(session_id, "user", prompt).await?;
 
@@ -487,7 +608,7 @@ async fn run_claude_session(
     );
 
     let mut child = cmd.spawn()?;
-    let (text, claude_sid) = run_with_timeout(&mut child, session_id, event_tx).await?;
+    let (text, claude_sid) = run_with_timeout(&mut child, session_id, event_tx, cancel_rx).await?;
 
     if let Some(ref csid) = claude_sid {
         db.set_claude_session_id(session_id, csid).await?;
@@ -518,6 +639,7 @@ async fn resume_claude_session(
     skip_permissions: bool,
     db: &Database,
     event_tx: &broadcast::Sender<AgentEvent>,
+    cancel_rx: oneshot::Receiver<()>,
 ) -> Result<()> {
     let mcp_config_file = build_mcp_config(mcp_servers)?;
     let mut _temp_dir = None;
@@ -529,7 +651,7 @@ async fn resume_claude_session(
     cmd.arg(prompt);
 
     let mut child = cmd.spawn()?;
-    let (text, _) = run_with_timeout(&mut child, session_id, event_tx).await?;
+    let (text, _) = run_with_timeout(&mut child, session_id, event_tx, cancel_rx).await?;
 
     drain_stderr(&mut child, session_id).await;
     let status = child.wait().await?;

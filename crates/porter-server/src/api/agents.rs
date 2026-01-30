@@ -15,6 +15,7 @@ pub fn router() -> Router<AppState> {
             "/api/agents/{id}/messages",
             get(get_messages).post(send_message),
         )
+        .route("/api/agents/{id}/cancel", axum::routing::post(cancel_session))
 }
 
 #[derive(Deserialize)]
@@ -133,6 +134,23 @@ async fn send_message(
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok((StatusCode::OK, Json(user_msg)))
+}
+
+async fn cancel_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let cancelled = state
+        .agent_manager
+        .cancel_session(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if cancelled {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
 }
 
 async fn delete_session(

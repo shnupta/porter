@@ -54,7 +54,7 @@ export function useWebSocket() {
  */
 export function useAgentStream(
   sessionId: string | undefined,
-  onChunk: (content: string) => void
+  onChunk: (content: string, contentType: string) => void
 ) {
   useEffect(() => {
     if (!sessionId) return;
@@ -63,9 +63,13 @@ export function useAgentStream(
 
     const unsubscribe = wsClient.subscribe((event: WsEvent) => {
       if (event.type === "AgentOutput" && event.data) {
-        const data = event.data as { session_id?: string; content?: string };
+        const data = event.data as {
+          session_id?: string;
+          content?: string;
+          content_type?: string;
+        };
         if (data.session_id === sessionId && data.content) {
-          onChunk(data.content);
+          onChunk(data.content, data.content_type ?? "text");
         }
       }
     });

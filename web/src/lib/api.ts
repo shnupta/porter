@@ -140,6 +140,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ content }),
     }),
+  cancelSession: (sessionId: string) =>
+    request<void>(`/api/agents/${sessionId}/cancel`, { method: "POST" }),
 
   // Integrations
   listIntegrations: () => request<IntegrationsResponse>("/api/integrations"),

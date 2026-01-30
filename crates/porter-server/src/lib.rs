@@ -121,9 +121,15 @@ pub async fn run_server(config: PorterConfig) -> anyhow::Result<()> {
         tokio::spawn(async move {
             while let Ok(event) = agent_rx.recv().await {
                 let ws_event = match event {
-                    AgentEvent::Output { session_id, content } => {
-                        WsEvent::AgentOutput { session_id, content }
-                    }
+                    AgentEvent::Output {
+                        session_id,
+                        content,
+                        content_type,
+                    } => WsEvent::AgentOutput {
+                        session_id,
+                        content,
+                        content_type,
+                    },
                     AgentEvent::StatusChanged { session_id, status } => {
                         WsEvent::AgentStatusChanged { session_id, status }
                     }

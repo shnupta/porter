@@ -406,7 +406,7 @@ fn task_from_row(row: &SqliteRow) -> anyhow::Result<Task> {
         priority: TaskPriority::from_str(&priority_str).unwrap_or(TaskPriority::Medium),
         tags,
         due_date,
-        integration_id: row.get("integration_id"),
+        integration_id: row.try_get("integration_id").unwrap_or(None),
         created_at: chrono::DateTime::parse_from_rfc3339(&created_at)?
             .with_timezone(&Utc),
         updated_at: chrono::DateTime::parse_from_rfc3339(&updated_at)?

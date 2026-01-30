@@ -201,7 +201,11 @@ pub enum WsEvent {
     TaskCreated(Task),
     TaskUpdated(Task),
     TaskDeleted { id: String },
-    AgentOutput { session_id: String, content: String },
+    AgentOutput {
+        session_id: String,
+        content: String,
+        content_type: String,
+    },
     AgentStatusChanged { session_id: String, status: AgentStatus },
     Notification(Notification),
 }

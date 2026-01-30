@@ -5,7 +5,16 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Send, Loader2, Bot, User, FolderOpen } from "lucide-react";
+import {
+  ArrowLeft,
+  Send,
+  Loader2,
+  Bot,
+  User,
+  FolderOpen,
+  Wrench,
+  Square,
+} from "lucide-react";
 import { api, type AgentMessage } from "@/lib/api";
 import { useAgentStream } from "@/hooks/use-websocket";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +28,12 @@ export default function AgentSessionPage() {
   const queryClient = useQueryClient();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = useState("");
-  const [streamingText, setStreamingText] = useState("");
+
+  interface StreamBlock {
+    type: "text" | "thinking" | "tool_use";
+    content: string;
+  }
+  const [streamBlocks, setStreamBlocks] = useState<StreamBlock[]>([]);
 
   const { data: session, isLoading: sessionLoading } = useQuery({
     queryKey: ["agent-session", id],
@@ -35,17 +49,35 @@ export default function AgentSessionPage() {
     queryFn: () => api.getMessages(id),
   });
 
-  // When messages refetch (after stream completes), clear streaming text
+  // When messages refetch (after stream completes), clear streaming blocks
   useEffect(() => {
     if (session?.status !== "running") {
-      setStreamingText("");
+      setStreamBlocks([]);
     }
   }, [session?.status, messages]);
 
   // Stream incoming chunks into local state
-  const onChunk = useCallback((content: string) => {
-    setStreamingText((prev) => prev + content);
-  }, []);
+  const onChunk = useCallback(
+    (content: string, contentType: string) => {
+      const type = (contentType === "thinking" || contentType === "tool_use"
+        ? contentType
+        : "text") as StreamBlock["type"];
+
+      setStreamBlocks((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.type === type) {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            ...last,
+            content: last.content + content,
+          };
+          return updated;
+        }
+        return [...prev, { type, content }];
+      });
+    },
+    []
+  );
 
   useAgentStream(id, onChunk);
 
@@ -55,15 +87,23 @@ export default function AgentSessionPage() {
       top: scrollRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages, streamingText]);
+  }, [messages, streamBlocks]);
 
   const sendMutation = useMutation({
     mutationFn: (content: string) => api.sendMessage(id, content),
     onSuccess: () => {
       setInput("");
-      setStreamingText("");
+      setStreamBlocks([]);
       queryClient.invalidateQueries({ queryKey: ["agent-messages", id] });
       queryClient.invalidateQueries({ queryKey: ["agent-session", id] });
+    },
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: () => api.cancelSession(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent-session", id] });
+      queryClient.invalidateQueries({ queryKey: ["agent-messages", id] });
     },
   });
 
@@ -151,17 +191,59 @@ export default function AgentSessionPage() {
             {messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} />
             ))}
-            {/* Streaming text that hasn't been persisted yet */}
-            {streamingText && session?.status === "running" && (
+            {/* Streaming blocks that haven't been persisted yet */}
+            {streamBlocks.length > 0 && session?.status === "running" && (
               <div className="flex gap-3">
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
                   <Bot className="h-4 w-4" />
                 </div>
-                <div className="flex-1 rounded-lg bg-muted/50 px-3 py-2 text-sm prose prose-sm dark:prose-invert max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {streamingText}
-                  </ReactMarkdown>
-                  <span className="inline-block w-1.5 h-4 bg-foreground/70 animate-pulse ml-0.5 align-text-bottom" />
+                <div className="flex-1 space-y-2">
+                  {streamBlocks.map((block, i) => {
+                    const isLast = i === streamBlocks.length - 1;
+                    if (block.type === "thinking") {
+                      return (
+                        <details
+                          key={i}
+                          open={isLast}
+                          className="rounded-lg bg-muted/30 border border-border/50"
+                        >
+                          <summary className="px-3 py-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+                            Thinking...
+                          </summary>
+                          <div className="px-3 pb-2 text-sm italic text-muted-foreground/70 whitespace-pre-wrap">
+                            {block.content}
+                            {isLast && (
+                              <span className="inline-block w-1.5 h-4 bg-muted-foreground/40 animate-pulse ml-0.5 align-text-bottom" />
+                            )}
+                          </div>
+                        </details>
+                      );
+                    }
+                    if (block.type === "tool_use") {
+                      return (
+                        <div
+                          key={i}
+                          className="inline-flex items-center gap-1.5 rounded-md bg-muted/50 border border-border/50 px-2.5 py-1 text-xs font-mono text-muted-foreground"
+                        >
+                          <Wrench className="h-3 w-3" />
+                          {block.content}
+                        </div>
+                      );
+                    }
+                    return (
+                      <div
+                        key={i}
+                        className="rounded-lg bg-muted/50 px-3 py-2 text-sm prose prose-sm dark:prose-invert max-w-none"
+                      >
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {block.content}
+                        </ReactMarkdown>
+                        {isLast && (
+                          <span className="inline-block w-1.5 h-4 bg-foreground/70 animate-pulse ml-0.5 align-text-bottom" />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -175,34 +257,50 @@ export default function AgentSessionPage() {
 
       {/* Input */}
       <div className="border-t p-4">
-        <div className="flex gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              !session?.claude_session_id
-                ? "Waiting for session to initialize..."
-                : session.status === "running"
-                  ? "Agent is responding..."
+        {session?.status === "running" ? (
+          <div className="flex justify-center">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => cancelMutation.mutate()}
+              disabled={cancelMutation.isPending}
+            >
+              {cancelMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
+              ) : (
+                <Square className="h-3.5 w-3.5 mr-2" />
+              )}
+              Stop
+            </Button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                !session?.claude_session_id
+                  ? "Waiting for session to initialize..."
                   : "Send a follow-up message..."
-            }
-            disabled={!session?.claude_session_id || session.status === "running"}
-            className="min-h-10 max-h-32 resize-none"
-            rows={1}
-          />
-          <Button
-            size="icon"
-            onClick={handleSend}
-            disabled={!canSend || sendMutation.isPending}
-          >
-            {sendMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-          </Button>
-        </div>
+              }
+              disabled={!session?.claude_session_id}
+              className="min-h-10 max-h-32 resize-none"
+              rows={1}
+            />
+            <Button
+              size="icon"
+              onClick={handleSend}
+              disabled={!canSend || sendMutation.isPending}
+            >
+              {sendMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
