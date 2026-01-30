@@ -1,35 +1,74 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, Task } from "@/lib/api";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CreateTaskDialog } from "@/components/tasks/create-task-dialog";
+import { TaskCard } from "@/components/tasks/task-card";
+import { cn } from "@/lib/utils";
 
-const statusColors: Record<Task["status"], string> = {
-  pending: "bg-yellow-100 text-yellow-800",
-  in_progress: "bg-blue-100 text-blue-800",
-  completed: "bg-green-100 text-green-800",
-  cancelled: "bg-gray-100 text-gray-800",
-};
+type FilterTab = "all" | Task["status"];
 
-const priorityLabels: Record<Task["priority"], string> = {
-  low: "Low",
-  medium: "Med",
-  high: "High",
-  urgent: "Urgent",
-};
+const tabs: { value: FilterTab; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "pending", label: "Pending" },
+  { value: "in_progress", label: "In Progress" },
+  { value: "completed", label: "Completed" },
+  { value: "cancelled", label: "Cancelled" },
+];
 
 export default function TasksPage() {
+  const [filter, setFilter] = useState<FilterTab>("all");
+
   const { data: tasks, isLoading } = useQuery({
     queryKey: ["tasks"],
     queryFn: () => api.listTasks(),
   });
 
+  const filtered =
+    tasks && filter !== "all"
+      ? tasks.filter((t) => t.status === filter)
+      : tasks;
+
+  const counts = tasks?.reduce(
+    (acc, t) => {
+      acc[t.status] = (acc[t.status] || 0) + 1;
+      acc.all = (acc.all || 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>
+  );
+
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Tasks</h1>
-        <p className="text-muted-foreground">Manage your tasks</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Tasks</h1>
+          <p className="text-muted-foreground">Manage your tasks</p>
+        </div>
+        <CreateTaskDialog />
+      </div>
+
+      <div className="flex gap-1 border-b">
+        {tabs.map((tab) => (
+          <button
+            key={tab.value}
+            onClick={() => setFilter(tab.value)}
+            className={cn(
+              "px-3 py-2 text-sm font-medium border-b-2 transition-colors -mb-px",
+              filter === tab.value
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {tab.label}
+            {counts?.[tab.value] != null && (
+              <span className="ml-1.5 text-xs text-muted-foreground">
+                {counts[tab.value]}
+              </span>
+            )}
+          </button>
+        ))}
       </div>
 
       {isLoading ? (
@@ -41,37 +80,17 @@ export default function TasksPage() {
             />
           ))}
         </div>
-      ) : tasks && tasks.length > 0 ? (
-        <div className="space-y-3">
-          {tasks.map((task) => (
-            <Card key={task.id}>
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">{task.title}</CardTitle>
-                  <div className="flex gap-2">
-                    <Badge variant="outline">
-                      {priorityLabels[task.priority]}
-                    </Badge>
-                    <Badge className={statusColors[task.status]}>
-                      {task.status.replace("_", " ")}
-                    </Badge>
-                  </div>
-                </div>
-              </CardHeader>
-              {task.description && (
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">
-                    {task.description}
-                  </p>
-                </CardContent>
-              )}
-            </Card>
+      ) : filtered && filtered.length > 0 ? (
+        <div className="space-y-2">
+          {filtered.map((task) => (
+            <TaskCard key={task.id} task={task} />
           ))}
         </div>
       ) : (
         <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
-          No tasks yet. Create one from the CLI with: porter task new
-          &quot;Your task&quot;
+          {filter === "all"
+            ? "No tasks yet. Click \"New Task\" to create one."
+            : `No ${filter.replace("_", " ")} tasks.`}
         </div>
       )}
     </div>
