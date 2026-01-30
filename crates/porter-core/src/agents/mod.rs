@@ -357,7 +357,6 @@ fn configure_cmd(
         .arg("--output-format")
         .arg("stream-json")
         .arg("--verbose")
-        .arg("--include-partial-messages")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -387,7 +386,6 @@ async fn process_stream(
     let mut reader = BufReader::new(stdout).lines();
     let mut accumulated_text = String::new();
     let mut claude_session_id: Option<String> = None;
-    let mut block_types: HashMap<u64, String> = HashMap::new();
     let mut first_event = true;
 
     loop {
@@ -435,12 +433,11 @@ async fn process_stream(
                 }
             }
             "assistant" => {
-                // Full message event — only use as fallback when streaming
-                // didn't produce content (otherwise we'd double the text).
-                if accumulated_text.is_empty() {
-                    if let Some(content) = parsed["message"]["content"].as_array() {
-                        for block in content {
-                            if block["type"].as_str() == Some("text") {
+                // Parse all content blocks from the assistant message
+                if let Some(content) = parsed["message"]["content"].as_array() {
+                    for block in content {
+                        match block["type"].as_str() {
+                            Some("text") => {
                                 if let Some(text) = block["text"].as_str() {
                                     accumulated_text.push_str(text);
                                     let _ = event_tx.send(AgentEvent::Output {
@@ -450,29 +447,17 @@ async fn process_stream(
                                     });
                                 }
                             }
-                        }
-                    }
-                }
-            }
-            // With --include-partial-messages, streaming events arrive wrapped
-            // in {"type":"stream_event","event":{...}}
-            "stream_event" => {
-                let inner = &parsed["event"];
-                let inner_type = inner["type"].as_str().unwrap_or("");
-
-                match inner_type {
-                    "content_block_start" => {
-                        if let Some(index) = inner["index"].as_u64() {
-                            let block_type = inner["content_block"]["type"]
-                                .as_str()
-                                .unwrap_or("text")
-                                .to_string();
-                            block_types.insert(index, block_type.clone());
-
-                            if block_type == "tool_use" {
-                                if let Some(name) =
-                                    inner["content_block"]["name"].as_str()
-                                {
+                            Some("thinking") => {
+                                if let Some(thinking) = block["thinking"].as_str() {
+                                    let _ = event_tx.send(AgentEvent::Output {
+                                        session_id: session_id.to_string(),
+                                        content: thinking.to_string(),
+                                        content_type: "thinking".to_string(),
+                                    });
+                                }
+                            }
+                            Some("tool_use") => {
+                                if let Some(name) = block["name"].as_str() {
                                     let _ = event_tx.send(AgentEvent::Output {
                                         session_id: session_id.to_string(),
                                         content: name.to_string(),
@@ -480,50 +465,9 @@ async fn process_stream(
                                     });
                                 }
                             }
+                            _ => {}
                         }
                     }
-                    "content_block_delta" => {
-                        let index = inner["index"].as_u64().unwrap_or(0);
-                        let block_type = block_types
-                            .get(&index)
-                            .map(|s| s.as_str())
-                            .unwrap_or("text");
-
-                        match block_type {
-                            "thinking" => {
-                                if let Some(text) =
-                                    inner["delta"]["thinking"].as_str()
-                                {
-                                    let _ = event_tx.send(AgentEvent::Output {
-                                        session_id: session_id.to_string(),
-                                        content: text.to_string(),
-                                        content_type: "thinking".to_string(),
-                                    });
-                                }
-                            }
-                            "tool_use" => {
-                                // Skip input_json_delta
-                            }
-                            _ => {
-                                if let Some(text) =
-                                    inner["delta"]["text"].as_str()
-                                {
-                                    accumulated_text.push_str(text);
-                                    let _ = event_tx.send(AgentEvent::Output {
-                                        session_id: session_id.to_string(),
-                                        content: text.to_string(),
-                                        content_type: "text".to_string(),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    "content_block_stop" => {
-                        if let Some(index) = inner["index"].as_u64() {
-                            block_types.remove(&index);
-                        }
-                    }
-                    _ => {}
                 }
             }
             "result" => {
@@ -687,6 +631,15 @@ async fn resume_claude_session(
     cmd.arg("--resume").arg(claude_session_id);
     configure_cmd(&mut cmd, &cwd, skip_permissions, &mcp_config_file);
     cmd.arg(prompt);
+
+    tracing::info!(
+        session_id = %session_id,
+        claude_session_id = %claude_session_id,
+        cwd = %cwd.display(),
+        mcp = ?mcp_servers.keys().collect::<Vec<_>>(),
+        skip_permissions,
+        "Resuming Claude session"
+    );
 
     let mut child = cmd.spawn()?;
     let (text, _) = run_with_timeout(&mut child, session_id, event_tx, cancel_rx).await?;
