@@ -5,9 +5,9 @@ mod ws;
 use porter_core::agents::AgentManager;
 use porter_core::config::PorterConfig;
 use porter_core::db::{self, Database};
+use porter_core::integrations::IntegrationRegistry;
 use porter_core::models::{Task, WsEvent};
-use porter_core::skills::SkillRegistry;
-use porter_skills::register_builtin_skills;
+use porter_integrations::register_builtin_integrations;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,7 +17,7 @@ use tokio::sync::broadcast;
 pub struct AppState {
     pub config: Arc<PorterConfig>,
     pub db: Database,
-    pub skill_registry: Arc<SkillRegistry>,
+    pub integration_registry: Arc<IntegrationRegistry>,
     pub agent_manager: Arc<AgentManager>,
     pub ws_tx: broadcast::Sender<WsEvent>,
     pub started_at: Instant,
@@ -50,16 +50,17 @@ pub async fn run_server(config: PorterConfig) -> anyhow::Result<()> {
     db::run_migrations(&pool).await?;
     let database = Database::new(pool);
 
-    // Skill registry
-    let mut registry = SkillRegistry::new();
-    register_builtin_skills(&mut registry, &config.skills.enabled);
+    // Integration registry
+    let mut registry = IntegrationRegistry::new();
+    register_builtin_integrations(&mut registry, &config.integrations.enabled);
 
-    // Agent manager
+    // Agent manager (with MCP server configs)
     let agent_manager = AgentManager::new(
         database.clone(),
         config.agents.claude_binary.clone(),
         config.agents.max_concurrent_sessions,
         config.agents.default_model.clone(),
+        config.agents.mcp.clone(),
     );
 
     // WebSocket broadcast channel
@@ -68,7 +69,7 @@ pub async fn run_server(config: PorterConfig) -> anyhow::Result<()> {
     let state = AppState {
         config: Arc::new(config.clone()),
         db: database,
-        skill_registry: Arc::new(registry),
+        integration_registry: Arc::new(registry),
         agent_manager: Arc::new(agent_manager),
         ws_tx,
         started_at: Instant::now(),

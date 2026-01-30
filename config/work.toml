@@ -3,23 +3,15 @@ name = "porter-work"
 port = 3100
 db_path = "porter-work.db"
 
-[skills]
-enabled = ["tasks", "slack", "calendar", "email"]
-
-[skills.slack]
-workspace = "my-company"
-# bot_token_env = "PORTER_SLACK_BOT_TOKEN"
-channels = ["general", "engineering"]
-
-[skills.email]
-imap_host = "imap.gmail.com"
-smtp_host = "smtp.gmail.com"
-# account_env = "PORTER_EMAIL_ACCOUNT"
+[integrations]
+enabled = ["tasks"]
 
 [agents]
 claude_binary = "claude"
 max_concurrent_sessions = 5
 default_model = "opus"
 
-[agents.skills]
-enabled = ["tasks", "slack", "calendar"]
+# [agents.mcp.slack]
+# command = "npx"
+# args = ["-y", "@anthropic/slack-mcp"]
+# env = { SLACK_TOKEN = "env:PORTER_SLACK_TOKEN" }

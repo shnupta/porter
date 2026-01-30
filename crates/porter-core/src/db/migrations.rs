@@ -11,7 +11,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             priority TEXT NOT NULL DEFAULT 'medium',
             tags TEXT NOT NULL DEFAULT '[]',
             due_date TEXT,
-            skill_id TEXT,
+            integration_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -39,7 +39,7 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             notification_type TEXT NOT NULL,
             message TEXT NOT NULL,
             read INTEGER NOT NULL DEFAULT 0,
-            skill_id TEXT,
+            integration_id TEXT,
             created_at TEXT NOT NULL
         );
 
@@ -53,12 +53,12 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
             updated_at TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS skills_state (
-            skill_id TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS integrations_state (
+            integration_id TEXT NOT NULL,
             key TEXT NOT NULL,
             value TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            PRIMARY KEY (skill_id, key)
+            PRIMARY KEY (integration_id, key)
         );
 
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);

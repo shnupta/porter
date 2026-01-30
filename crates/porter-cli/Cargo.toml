@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 porter-core = { workspace = true }
 porter-server = { workspace = true }
-porter-skills = { workspace = true }
+porter-integrations = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
 reqwest = { workspace = true }

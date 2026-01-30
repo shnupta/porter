@@ -25,7 +25,7 @@ impl Database {
         let tags_json = serde_json::to_string(&task.tags)?;
 
         sqlx::query(
-            "INSERT INTO tasks (id, title, description, status, priority, tags, due_date, skill_id, created_at, updated_at)
+            "INSERT INTO tasks (id, title, description, status, priority, tags, due_date, integration_id, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&task.id)
@@ -35,7 +35,7 @@ impl Database {
         .bind(task.priority.as_str())
         .bind(&tags_json)
         .bind(task.due_date.map(|d| d.to_rfc3339()))
-        .bind(&task.skill_id)
+        .bind(&task.integration_id)
         .bind(task.created_at.to_rfc3339())
         .bind(task.updated_at.to_rfc3339())
         .execute(&self.pool)
@@ -263,24 +263,24 @@ impl Database {
         &self,
         notification_type: &str,
         message: &str,
-        skill_id: Option<&str>,
+        integration_id: Option<&str>,
     ) -> anyhow::Result<Notification> {
         let notification = Notification {
             id: Uuid::new_v4().to_string(),
             notification_type: notification_type.to_string(),
             message: message.to_string(),
             read: false,
-            skill_id: skill_id.map(String::from),
+            integration_id: integration_id.map(String::from),
             created_at: Utc::now(),
         };
 
         sqlx::query(
-            "INSERT INTO notifications (id, notification_type, message, read, skill_id, created_at) VALUES (?, ?, ?, 0, ?, ?)",
+            "INSERT INTO notifications (id, notification_type, message, read, integration_id, created_at) VALUES (?, ?, ?, 0, ?, ?)",
         )
         .bind(&notification.id)
         .bind(&notification.notification_type)
         .bind(&notification.message)
-        .bind(&notification.skill_id)
+        .bind(&notification.integration_id)
         .bind(notification.created_at.to_rfc3339())
         .execute(&self.pool)
         .await?;
@@ -313,7 +313,7 @@ fn task_from_row(row: &SqliteRow) -> anyhow::Result<Task> {
         priority: TaskPriority::from_str(&priority_str).unwrap_or(TaskPriority::Medium),
         tags,
         due_date,
-        skill_id: row.get("skill_id"),
+        integration_id: row.get("integration_id"),
         created_at: chrono::DateTime::parse_from_rfc3339(&created_at)?
             .with_timezone(&Utc),
         updated_at: chrono::DateTime::parse_from_rfc3339(&updated_at)?

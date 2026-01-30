@@ -24,7 +24,7 @@ const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Tasks", href: "/tasks", icon: CheckSquare },
   { name: "Agents", href: "/agents", icon: Bot },
-  { name: "Skills", href: "/skills", icon: Puzzle },
+  { name: "Integrations", href: "/integrations", icon: Puzzle },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 

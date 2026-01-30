@@ -13,7 +13,7 @@ pub struct Task {
     pub priority: TaskPriority,
     pub tags: Vec<String>,
     pub due_date: Option<DateTime<Utc>>,
-    pub skill_id: Option<String>,
+    pub integration_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -156,18 +156,25 @@ pub struct Notification {
     pub notification_type: String,
     pub message: String,
     pub read: bool,
-    pub skill_id: Option<String>,
+    pub integration_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
-// ── Skills ──
+// ── Integrations ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillInfo {
+pub struct IntegrationInfo {
     pub id: String,
     pub name: String,
     pub enabled: bool,
     pub capabilities: Vec<String>,
+}
+
+/// Info about a configured MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerInfo {
+    pub name: String,
+    pub command: String,
 }
 
 // ── Server Status ──
@@ -177,7 +184,8 @@ pub struct ServerStatus {
     pub instance_name: String,
     pub version: String,
     pub uptime_seconds: u64,
-    pub active_skills: Vec<String>,
+    pub active_integrations: Vec<String>,
+    pub mcp_servers: Vec<String>,
     pub active_agent_sessions: usize,
     pub pending_tasks: usize,
 }
@@ -206,7 +214,7 @@ impl Task {
             priority: input.priority.unwrap_or(TaskPriority::Medium),
             tags: input.tags.unwrap_or_default(),
             due_date: input.due_date,
-            skill_id: None,
+            integration_id: None,
             created_at: now,
             updated_at: now,
         }

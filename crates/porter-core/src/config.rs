@@ -6,7 +6,7 @@ use std::path::Path;
 pub struct PorterConfig {
     pub instance: InstanceConfig,
     #[serde(default)]
-    pub skills: SkillsConfig,
+    pub integrations: IntegrationsConfig,
     #[serde(default)]
     pub agents: AgentsConfig,
 }
@@ -29,11 +29,9 @@ fn default_db_path() -> String {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct SkillsConfig {
+pub struct IntegrationsConfig {
     #[serde(default)]
     pub enabled: Vec<String>,
-    #[serde(flatten)]
-    pub skill_configs: HashMap<String, toml::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,8 +42,9 @@ pub struct AgentsConfig {
     pub max_concurrent_sessions: usize,
     #[serde(default = "default_model")]
     pub default_model: String,
+    /// MCP servers available to Claude agent sessions.
     #[serde(default)]
-    pub skills: AgentSkillsConfig,
+    pub mcp: HashMap<String, McpServerConfig>,
 }
 
 impl Default for AgentsConfig {
@@ -54,7 +53,7 @@ impl Default for AgentsConfig {
             claude_binary: default_claude_binary(),
             max_concurrent_sessions: default_max_sessions(),
             default_model: default_model(),
-            skills: AgentSkillsConfig::default(),
+            mcp: HashMap::new(),
         }
     }
 }
@@ -71,10 +70,18 @@ fn default_model() -> String {
     "opus".to_string()
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct AgentSkillsConfig {
+/// Configuration for an MCP server that Claude can use during agent sessions.
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpServerConfig {
+    /// The command to run (e.g. "npx", "node", "python").
+    pub command: String,
+    /// Arguments to the command.
     #[serde(default)]
-    pub enabled: Vec<String>,
+    pub args: Vec<String>,
+    /// Environment variables. Values prefixed with "env:" are read from
+    /// the process environment at runtime.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 impl PorterConfig {

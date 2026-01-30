@@ -1,7 +1,7 @@
-mod health;
-mod tasks;
 mod agents;
-mod skills;
+mod health;
+mod integrations;
+mod tasks;
 
 use crate::AppState;
 use axum::Router;
@@ -11,5 +11,5 @@ pub fn router() -> Router<AppState> {
         .merge(health::router())
         .merge(tasks::router())
         .merge(agents::router())
-        .merge(skills::router())
+        .merge(integrations::router())
 }

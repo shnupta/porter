@@ -17,11 +17,19 @@ pub async fn run(server: &str) -> anyhow::Result<()> {
             println!("  Version:  {}", status.version);
             println!("  Uptime:   {}s", status.uptime_seconds);
             println!(
-                "  Skills:   {}",
-                if status.active_skills.is_empty() {
+                "  Integrations: {}",
+                if status.active_integrations.is_empty() {
                     "none".dimmed().to_string()
                 } else {
-                    status.active_skills.join(", ")
+                    status.active_integrations.join(", ")
+                }
+            );
+            println!(
+                "  MCP Servers:  {}",
+                if status.mcp_servers.is_empty() {
+                    "none".dimmed().to_string()
+                } else {
+                    status.mcp_servers.join(", ")
                 }
             );
             println!("  Sessions: {}", status.active_agent_sessions);

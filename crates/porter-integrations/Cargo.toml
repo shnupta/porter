@@ -1,5 +1,5 @@
 [package]
-name = "porter-skills"
+name = "porter-integrations"
 version.workspace = true
 edition.workspace = true
 

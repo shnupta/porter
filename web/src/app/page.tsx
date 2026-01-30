@@ -87,9 +87,11 @@ export default function DashboardPage() {
               icon={Bot}
             />
             <StatusCard
-              title="Active Skills"
-              value={status.active_skills.length}
-              description={status.active_skills.join(", ") || "None"}
+              title="Integrations"
+              value={status.active_integrations.length + status.mcp_servers.length}
+              description={
+                [...status.active_integrations, ...status.mcp_servers].join(", ") || "None"
+              }
               icon={Puzzle}
             />
             <StatusCard

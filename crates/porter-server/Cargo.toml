@@ -9,7 +9,7 @@ path = "src/lib.rs"
 
 [dependencies]
 porter-core = { workspace = true }
-porter-skills = { workspace = true }
+porter-integrations = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }

@@ -3,23 +3,27 @@ name = "porter-home"
 port = 3101
 db_path = "porter-home.db"
 
-[skills]
-enabled = ["tasks", "flights", "deliveries", "dining", "documents", "calendar", "email"]
-
-[skills.flights]
-preferred_airports = ["SYD", "MEL"]
-preferred_airlines = ["QF", "VA"]
-
-[skills.dining]
-location = "Sydney"
-cuisine_preferences = ["Japanese", "Italian", "Thai"]
-price_range = "$$-$$$"
-# opentable_api_key_env = "PORTER_OPENTABLE_KEY"
+[integrations]
+enabled = ["tasks"]
 
 [agents]
 claude_binary = "claude"
 max_concurrent_sessions = 3
 default_model = "opus"
 
-[agents.skills]
-enabled = ["tasks", "calendar"]
+# MCP servers available to Claude agent sessions.
+# Add new external integrations here — no Rust code needed.
+#
+# [agents.mcp.dining]
+# command = "npx"
+# args = ["-y", "opentable-mcp-server"]
+# env = { OPENTABLE_API_KEY = "env:PORTER_OPENTABLE_KEY" }
+#
+# [agents.mcp.flights]
+# command = "npx"
+# args = ["-y", "google-flights-mcp"]
+#
+# [agents.mcp.slack]
+# command = "npx"
+# args = ["-y", "@anthropic/slack-mcp"]
+# env = { SLACK_TOKEN = "env:PORTER_SLACK_TOKEN" }

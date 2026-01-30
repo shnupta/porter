@@ -1,17 +1,17 @@
 use async_trait::async_trait;
+use porter_core::integrations::*;
 use porter_core::models::Notification;
-use porter_core::skills::*;
 
-pub struct TaskSkill;
+pub struct TaskIntegration;
 
-impl TaskSkill {
+impl TaskIntegration {
     pub fn new() -> Self {
         Self
     }
 }
 
 #[async_trait]
-impl Skill for TaskSkill {
+impl Integration for TaskIntegration {
     fn id(&self) -> &str {
         "tasks"
     }
@@ -20,8 +20,8 @@ impl Skill for TaskSkill {
         "Task Management"
     }
 
-    async fn init(&mut self, _config: &SkillConfig) -> anyhow::Result<()> {
-        tracing::info!("Task skill initialized");
+    async fn init(&mut self, _config: &IntegrationConfig) -> anyhow::Result<()> {
+        tracing::info!("Task integration initialized");
         Ok(())
     }
 

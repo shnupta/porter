@@ -4,7 +4,7 @@ members = [
     "crates/porter-core",
     "crates/porter-server",
     "crates/porter-cli",
-    "crates/porter-skills",
+    "crates/porter-integrations",
 ]
 
 [workspace.package]
@@ -15,7 +15,7 @@ license = "MIT"
 [workspace.dependencies]
 porter-core = { path = "crates/porter-core" }
 porter-server = { path = "crates/porter-server" }
-porter-skills = { path = "crates/porter-skills" }
+porter-integrations = { path = "crates/porter-integrations" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

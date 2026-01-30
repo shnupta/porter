@@ -34,7 +34,8 @@ async fn status(State(state): State<AppState>) -> Json<ServerStatus> {
         instance_name: state.config.instance.name.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         uptime_seconds: uptime,
-        active_skills: state.skill_registry.ids(),
+        active_integrations: state.integration_registry.ids(),
+        mcp_servers: state.agent_manager.mcp_server_names(),
         active_agent_sessions: active_sessions,
         pending_tasks,
     })

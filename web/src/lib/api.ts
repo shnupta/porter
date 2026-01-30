@@ -24,7 +24,7 @@ export interface Task {
   priority: "low" | "medium" | "high" | "urgent";
   tags: string[];
   due_date: string | null;
-  skill_id: string | null;
+  integration_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -63,18 +63,29 @@ export interface AgentMessage {
   timestamp: string;
 }
 
-export interface SkillInfo {
+export interface IntegrationInfo {
   id: string;
   name: string;
   enabled: boolean;
   capabilities: string[];
 }
 
+export interface McpServerInfo {
+  name: string;
+  command: string;
+}
+
+export interface IntegrationsResponse {
+  integrations: IntegrationInfo[];
+  mcp_servers: McpServerInfo[];
+}
+
 export interface ServerStatus {
   instance_name: string;
   version: string;
   uptime_seconds: number;
-  active_skills: string[];
+  active_integrations: string[];
+  mcp_servers: string[];
   active_agent_sessions: number;
   pending_tasks: number;
 }
@@ -117,6 +128,6 @@ export const api = {
   getMessages: (sessionId: string) =>
     request<AgentMessage[]>(`/api/agents/${sessionId}/messages`),
 
-  // Skills
-  listSkills: () => request<SkillInfo[]>("/api/skills"),
+  // Integrations
+  listIntegrations: () => request<IntegrationsResponse>("/api/integrations"),
 };
