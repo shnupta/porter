@@ -1,0 +1,24 @@
+[package]
+name = "porter-server"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "porter_server"
+path = "src/lib.rs"
+
+[dependencies]
+porter-core = { workspace = true }
+porter-skills = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }

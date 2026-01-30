@@ -1,0 +1,25 @@
+[package]
+name = "porter-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "porter"
+path = "src/main.rs"
+
+[dependencies]
+porter-core = { workspace = true }
+porter-server = { workspace = true }
+porter-skills = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+colored = "3"
+indicatif = "0.17"

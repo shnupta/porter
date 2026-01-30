@@ -1,0 +1,25 @@
+[instance]
+name = "porter-home"
+port = 3101
+db_path = "porter-home.db"
+
+[skills]
+enabled = ["tasks", "flights", "deliveries", "dining", "documents", "calendar", "email"]
+
+[skills.flights]
+preferred_airports = ["SYD", "MEL"]
+preferred_airlines = ["QF", "VA"]
+
+[skills.dining]
+location = "Sydney"
+cuisine_preferences = ["Japanese", "Italian", "Thai"]
+price_range = "$$-$$$"
+# opentable_api_key_env = "PORTER_OPENTABLE_KEY"
+
+[agents]
+claude_binary = "claude"
+max_concurrent_sessions = 3
+default_model = "opus"
+
+[agents.skills]
+enabled = ["tasks", "calendar"]

@@ -1,0 +1,15 @@
+[package]
+name = "porter-skills"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+porter-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
