@@ -32,6 +32,37 @@ fn default_db_path() -> String {
 pub struct IntegrationsConfig {
     #[serde(default)]
     pub enabled: Vec<String>,
+    /// Per-integration settings captured from `[integrations.<name>]` TOML sections.
+    #[serde(flatten)]
+    pub settings: HashMap<String, toml::Value>,
+}
+
+/// Recursively walk a `toml::Value` tree and replace any string matching
+/// `"env:VAR_NAME"` with the value of the `VAR_NAME` environment variable.
+pub fn resolve_env_values(value: &mut toml::Value) {
+    match value {
+        toml::Value::String(s) => {
+            if let Some(var_name) = s.strip_prefix("env:") {
+                if let Ok(env_val) = std::env::var(var_name) {
+                    *s = env_val;
+                }
+            }
+        }
+        toml::Value::Table(table) => {
+            let keys: Vec<String> = table.keys().cloned().collect();
+            for key in keys {
+                if let Some(v) = table.get_mut(&key) {
+                    resolve_env_values(v);
+                }
+            }
+        }
+        toml::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                resolve_env_values(v);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

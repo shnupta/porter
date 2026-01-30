@@ -10,7 +10,7 @@ use porter_core::models::{Task, WsEvent};
 use porter_integrations::register_builtin_integrations;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
 #[derive(Clone)]
@@ -52,7 +52,7 @@ pub async fn run_server(config: PorterConfig) -> anyhow::Result<()> {
 
     // Integration registry
     let mut registry = IntegrationRegistry::new();
-    register_builtin_integrations(&mut registry, &config.integrations.enabled);
+    register_builtin_integrations(&mut registry, &config.integrations, database.clone()).await;
 
     // Agent manager (with MCP server configs)
     let agent_manager = AgentManager::new(
@@ -66,14 +66,53 @@ pub async fn run_server(config: PorterConfig) -> anyhow::Result<()> {
     // WebSocket broadcast channel
     let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
 
+    // Collect tick integrations before moving registry into Arc
+    let tick_integrations = registry.tick_integrations();
+
     let state = AppState {
         config: Arc::new(config.clone()),
-        db: database,
+        db: database.clone(),
         integration_registry: Arc::new(registry),
         agent_manager: Arc::new(agent_manager),
-        ws_tx,
+        ws_tx: ws_tx.clone(),
         started_at: Instant::now(),
     };
+
+    // Spawn background tick tasks for integrations that have a configured interval
+    for (integration, interval_secs) in tick_integrations {
+        let db = database.clone();
+        let tx = ws_tx.clone();
+        let id = integration.id().to_string();
+        tracing::info!(integration = %id, interval_secs, "Spawning tick task");
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+            loop {
+                interval.tick().await;
+                tracing::debug!(integration = %id, "Running tick");
+                match integration.tick().await {
+                    Ok(notifications) => {
+                        for notification in notifications {
+                            if let Err(e) = db
+                                .create_notification(
+                                    &notification.notification_type,
+                                    &notification.message,
+                                    notification.integration_id.as_deref(),
+                                )
+                                .await
+                            {
+                                tracing::error!(integration = %id, error = %e, "Failed to persist tick notification");
+                            }
+                            let _ = tx.send(WsEvent::Notification(notification));
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(integration = %id, error = %e, "Tick failed");
+                    }
+                }
+            }
+        });
+    }
 
     // Build router
     let app = axum::Router::new()

@@ -4,7 +4,7 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Database {
     pool: SqlitePool,
 }
@@ -255,6 +255,63 @@ impl Database {
                 .await?;
 
         rows.iter().map(agent_message_from_row).collect()
+    }
+
+    // ── Notifications ──
+
+    // ── Integration State ──
+
+    pub async fn get_integration_state(
+        &self,
+        integration_id: &str,
+        key: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT value FROM integrations_state WHERE integration_id = ? AND key = ?",
+        )
+        .bind(integration_id)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| r.get("value")))
+    }
+
+    pub async fn set_integration_state(
+        &self,
+        integration_id: &str,
+        key: &str,
+        value: &str,
+    ) -> anyhow::Result<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO integrations_state (integration_id, key, value, updated_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (integration_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        )
+        .bind(integration_id)
+        .bind(key)
+        .bind(value)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn delete_integration_state(
+        &self,
+        integration_id: &str,
+        key: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM integrations_state WHERE integration_id = ? AND key = ?",
+        )
+        .bind(integration_id)
+        .bind(key)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     // ── Notifications ──

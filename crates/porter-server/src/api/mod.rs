@@ -2,6 +2,7 @@ mod agents;
 mod health;
 mod integrations;
 mod tasks;
+mod webhooks;
 
 use crate::AppState;
 use axum::Router;
@@ -12,4 +13,5 @@ pub fn router() -> Router<AppState> {
         .merge(tasks::router())
         .merge(agents::router())
         .merge(integrations::router())
+        .merge(webhooks::router())
 }
