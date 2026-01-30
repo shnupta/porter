@@ -257,37 +257,37 @@ export default function AgentSessionPage() {
 
       {/* Input */}
       <div className="border-t p-4">
-        {session?.status === "running" ? (
-          <div className="flex justify-center">
+        <div className="flex gap-2">
+          <Textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              !session?.claude_session_id
+                ? "Waiting for session to initialize..."
+                : session.status === "running"
+                  ? "Agent is responding..."
+                  : "Send a follow-up message..."
+            }
+            disabled={!session?.claude_session_id || session.status === "running"}
+            className="min-h-10 max-h-32 resize-none"
+            rows={1}
+          />
+          {session?.status === "running" ? (
             <Button
               variant="outline"
-              size="sm"
+              size="icon"
               onClick={() => cancelMutation.mutate()}
               disabled={cancelMutation.isPending}
+              title="Stop agent"
             >
               {cancelMutation.isPending ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <Square className="h-3.5 w-3.5 mr-2" />
+                <Square className="h-4 w-4" />
               )}
-              Stop
             </Button>
-          </div>
-        ) : (
-          <div className="flex gap-2">
-            <Textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={
-                !session?.claude_session_id
-                  ? "Waiting for session to initialize..."
-                  : "Send a follow-up message..."
-              }
-              disabled={!session?.claude_session_id}
-              className="min-h-10 max-h-32 resize-none"
-              rows={1}
-            />
+          ) : (
             <Button
               size="icon"
               onClick={handleSend}
@@ -299,8 +299,8 @@ export default function AgentSessionPage() {
                 <Send className="h-4 w-4" />
               )}
             </Button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );

@@ -351,6 +351,7 @@ fn configure_cmd(
         .arg("--output-format")
         .arg("stream-json")
         .arg("--verbose")
+        .arg("--include-partial-messages")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -416,12 +417,9 @@ async fn process_stream(
                     if let Some(sid) = parsed["session_id"].as_str() {
                         claude_session_id = Some(sid.to_string());
                     }
-                    // Log which MCP servers Claude actually connected to
                     if let Some(servers) = parsed["mcp_servers"].as_array() {
-                        let names: Vec<&str> = servers
-                            .iter()
-                            .filter_map(|s| s.as_str())
-                            .collect();
+                        let names: Vec<&str> =
+                            servers.iter().filter_map(|s| s.as_str()).collect();
                         tracing::info!(
                             session_id = %session_id,
                             mcp_servers = ?names,
@@ -431,7 +429,7 @@ async fn process_stream(
                 }
             }
             "assistant" => {
-                // Extract text from message content blocks
+                // Full message event (non-streaming fallback)
                 if let Some(content) = parsed["message"]["content"].as_array() {
                     for block in content {
                         if block["type"].as_str() == Some("text") {
@@ -447,62 +445,76 @@ async fn process_stream(
                     }
                 }
             }
-            "content_block_start" => {
-                if let Some(index) = parsed["index"].as_u64() {
-                    let block_type = parsed["content_block"]["type"]
-                        .as_str()
-                        .unwrap_or("text")
-                        .to_string();
-                    block_types.insert(index, block_type.clone());
+            // With --include-partial-messages, streaming events arrive wrapped
+            // in {"type":"stream_event","event":{...}}
+            "stream_event" => {
+                let inner = &parsed["event"];
+                let inner_type = inner["type"].as_str().unwrap_or("");
 
-                    // For tool_use blocks, broadcast the tool name immediately
-                    if block_type == "tool_use" {
-                        if let Some(name) = parsed["content_block"]["name"].as_str() {
-                            let _ = event_tx.send(AgentEvent::Output {
-                                session_id: session_id.to_string(),
-                                content: name.to_string(),
-                                content_type: "tool_use".to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-            "content_block_delta" => {
-                let index = parsed["index"].as_u64().unwrap_or(0);
-                let block_type = block_types
-                    .get(&index)
-                    .map(|s| s.as_str())
-                    .unwrap_or("text");
+                match inner_type {
+                    "content_block_start" => {
+                        if let Some(index) = inner["index"].as_u64() {
+                            let block_type = inner["content_block"]["type"]
+                                .as_str()
+                                .unwrap_or("text")
+                                .to_string();
+                            block_types.insert(index, block_type.clone());
 
-                match block_type {
-                    "thinking" => {
-                        if let Some(text) = parsed["delta"]["thinking"].as_str() {
-                            let _ = event_tx.send(AgentEvent::Output {
-                                session_id: session_id.to_string(),
-                                content: text.to_string(),
-                                content_type: "thinking".to_string(),
-                            });
+                            if block_type == "tool_use" {
+                                if let Some(name) =
+                                    inner["content_block"]["name"].as_str()
+                                {
+                                    let _ = event_tx.send(AgentEvent::Output {
+                                        session_id: session_id.to_string(),
+                                        content: name.to_string(),
+                                        content_type: "tool_use".to_string(),
+                                    });
+                                }
+                            }
                         }
                     }
-                    "tool_use" => {
-                        // Skip input_json_delta — tool input JSON isn't useful to display
-                    }
-                    _ => {
-                        // text deltas
-                        if let Some(text) = parsed["delta"]["text"].as_str() {
-                            accumulated_text.push_str(text);
-                            let _ = event_tx.send(AgentEvent::Output {
-                                session_id: session_id.to_string(),
-                                content: text.to_string(),
-                                content_type: "text".to_string(),
-                            });
+                    "content_block_delta" => {
+                        let index = inner["index"].as_u64().unwrap_or(0);
+                        let block_type = block_types
+                            .get(&index)
+                            .map(|s| s.as_str())
+                            .unwrap_or("text");
+
+                        match block_type {
+                            "thinking" => {
+                                if let Some(text) =
+                                    inner["delta"]["thinking"].as_str()
+                                {
+                                    let _ = event_tx.send(AgentEvent::Output {
+                                        session_id: session_id.to_string(),
+                                        content: text.to_string(),
+                                        content_type: "thinking".to_string(),
+                                    });
+                                }
+                            }
+                            "tool_use" => {
+                                // Skip input_json_delta
+                            }
+                            _ => {
+                                if let Some(text) =
+                                    inner["delta"]["text"].as_str()
+                                {
+                                    accumulated_text.push_str(text);
+                                    let _ = event_tx.send(AgentEvent::Output {
+                                        session_id: session_id.to_string(),
+                                        content: text.to_string(),
+                                        content_type: "text".to_string(),
+                                    });
+                                }
+                            }
                         }
                     }
-                }
-            }
-            "content_block_stop" => {
-                if let Some(index) = parsed["index"].as_u64() {
-                    block_types.remove(&index);
+                    "content_block_stop" => {
+                        if let Some(index) = inner["index"].as_u64() {
+                            block_types.remove(&index);
+                        }
+                    }
+                    _ => {}
                 }
             }
             "result" => {
