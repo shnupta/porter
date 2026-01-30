@@ -321,11 +321,11 @@ fn build_mcp_config(
 }
 
 /// Resolve the working directory for a Claude subprocess.
-/// If an explicit directory was provided, use it. Otherwise use a fresh temp
-/// directory so Claude doesn't inherit the porter project context.
+/// If an explicit directory was provided, use it. Otherwise create a session
+/// directory in ~/.porter/sessions/{session_id} so it persists across resumes.
 fn resolve_working_dir(
     explicit: Option<&str>,
-    temp_holder: &mut Option<tempfile::TempDir>,
+    session_id: &str,
 ) -> Result<std::path::PathBuf> {
     if let Some(dir) = explicit {
         let path = std::path::PathBuf::from(dir);
@@ -335,13 +335,21 @@ fn resolve_working_dir(
         anyhow::bail!("Working directory does not exist: {dir}");
     }
 
-    // Create a temp directory so Claude starts in a blank state
-    let tmp = tempfile::Builder::new()
-        .prefix("porter-agent-")
-        .tempdir()?;
-    let path = tmp.path().to_path_buf();
-    *temp_holder = Some(tmp);
-    Ok(path)
+    // Create a persistent session directory in ~/.porter/sessions/{session_id}
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| anyhow::anyhow!("Could not determine home directory"))?;
+
+    let sessions_dir = std::path::PathBuf::from(home)
+        .join(".porter")
+        .join("sessions");
+
+    std::fs::create_dir_all(&sessions_dir)?;
+
+    let session_dir = sessions_dir.join(session_id);
+    std::fs::create_dir_all(&session_dir)?;
+
+    Ok(session_dir)
 }
 
 /// Apply common flags to a Claude command: CWD, --dangerously-skip-permissions,
@@ -534,6 +542,19 @@ async fn run_with_timeout(
                 Ok(inner) => inner,
                 Err(_) => {
                     tracing::error!(session_id = %session_id, "Claude session timed out, killing process");
+                    // Try to capture stderr before killing
+                    if let Some(mut stderr) = child.stderr.take() {
+                        let mut buf = String::new();
+                        use tokio::io::AsyncReadExt;
+                        if let Ok(_) = tokio::time::timeout(
+                            std::time::Duration::from_secs(1),
+                            stderr.read_to_string(&mut buf)
+                        ).await {
+                            if !buf.is_empty() {
+                                tracing::error!(session_id = %session_id, stderr = %buf, "Claude stderr on timeout");
+                            }
+                        }
+                    }
                     let _ = child.kill().await;
                     anyhow::bail!("Session timed out after {} seconds", SESSION_TIMEOUT.as_secs());
                 }
@@ -562,8 +583,13 @@ async fn run_claude_session(
     db.add_agent_message(session_id, "user", prompt).await?;
 
     let mcp_config_file = build_mcp_config(mcp_servers)?;
-    let mut _temp_dir = None;
-    let cwd = resolve_working_dir(working_directory, &mut _temp_dir)?;
+    let cwd = resolve_working_dir(working_directory, session_id)?;
+
+    // Save the working directory immediately so resume can use it
+    if working_directory.is_none() {
+        db.set_working_directory(session_id, cwd.to_str().unwrap_or_default())
+            .await?;
+    }
 
     let mut cmd = Command::new(claude_binary);
     configure_cmd(&mut cmd, &cwd, skip_permissions, &mcp_config_file);
@@ -623,13 +649,13 @@ async fn resume_claude_session(
     event_tx: &broadcast::Sender<AgentEvent>,
     cancel_rx: oneshot::Receiver<()>,
 ) -> Result<()> {
-    let mcp_config_file = build_mcp_config(mcp_servers)?;
-    let mut _temp_dir = None;
-    let cwd = resolve_working_dir(working_directory, &mut _temp_dir)?;
+    // Don't pass MCP config during resume - the session already has its servers initialized
+    let cwd = resolve_working_dir(working_directory, session_id)?;
 
     let mut cmd = Command::new(claude_binary);
     cmd.arg("--resume").arg(claude_session_id);
-    configure_cmd(&mut cmd, &cwd, skip_permissions, &mcp_config_file);
+    // Pass None for mcp_config_file since we don't want to reinitialize MCP servers on resume
+    configure_cmd(&mut cmd, &cwd, skip_permissions, &None);
     cmd.arg(prompt);
 
     tracing::info!(

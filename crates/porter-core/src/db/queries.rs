@@ -280,6 +280,21 @@ impl Database {
         Ok(result.rows_affected() > 0)
     }
 
+    pub async fn set_working_directory(
+        &self,
+        session_id: &str,
+        working_directory: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE agent_sessions SET working_directory = ? WHERE id = ?",
+        )
+        .bind(working_directory)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn get_agent_messages(
         &self,
         session_id: &str,

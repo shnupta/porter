@@ -50,32 +50,36 @@ export default function AgentSessionPage() {
     queryFn: () => api.getMessages(id),
   });
 
-  // When messages refetch (after stream completes), clear streaming blocks
+  // Clear streaming blocks when session is no longer running
   useEffect(() => {
     if (session?.status !== "running") {
       setStreamBlocks([]);
+      seenContent.current.clear();
     }
-  }, [session?.status, messages]);
+  }, [session?.status]);
 
   // Stream incoming chunks into local state
+  // Note: Without --include-partial-messages, Claude emits multiple assistant
+  // events as the response builds. Each event contains complete blocks.
+  // We deduplicate by tracking content we've already seen.
+  const seenContent = useRef(new Set<string>());
+
   const onChunk = useCallback(
     (content: string, contentType: string) => {
       const type = (contentType === "thinking" || contentType === "tool_use"
         ? contentType
         : "text") as StreamBlock["type"];
 
-      setStreamBlocks((prev) => {
-        const last = prev[prev.length - 1];
-        if (last && last.type === type) {
-          const updated = [...prev];
-          updated[updated.length - 1] = {
-            ...last,
-            content: last.content + content,
-          };
-          return updated;
-        }
-        return [...prev, { type, content }];
-      });
+      // Create a unique key for this content to avoid duplicates
+      const key = `${type}:${content}`;
+
+      // Skip if we've already seen this exact content
+      if (seenContent.current.has(key)) {
+        return;
+      }
+
+      seenContent.current.add(key);
+      setStreamBlocks((prev) => [...prev, { type, content }]);
     },
     []
   );
@@ -95,6 +99,7 @@ export default function AgentSessionPage() {
     onSuccess: () => {
       setInput("");
       setStreamBlocks([]);
+      seenContent.current.clear();
       queryClient.invalidateQueries({ queryKey: ["agent-messages", id] });
       queryClient.invalidateQueries({ queryKey: ["agent-session", id] });
     },
@@ -213,9 +218,6 @@ export default function AgentSessionPage() {
                           </summary>
                           <div className="px-3 pb-2 text-sm italic text-muted-foreground/70 whitespace-pre-wrap">
                             {block.content}
-                            {isLast && (
-                              <span className="inline-block w-1.5 h-4 bg-muted-foreground/40 animate-pulse ml-0.5 align-text-bottom" />
-                            )}
                           </div>
                         </details>
                       );
@@ -239,9 +241,6 @@ export default function AgentSessionPage() {
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {block.content}
                         </ReactMarkdown>
-                        {isLast && (
-                          <span className="inline-block w-1.5 h-4 bg-foreground/70 animate-pulse ml-0.5 align-text-bottom" />
-                        )}
                       </div>
                     );
                   })}

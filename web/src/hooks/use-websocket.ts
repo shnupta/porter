@@ -19,19 +19,26 @@ export function useWebSocket() {
           queryClient.invalidateQueries({ queryKey: ["server-status"] });
           break;
         case "AgentOutput":
+          // Don't invalidate queries during streaming - let useAgentStream handle it
+          // Only invalidate the session list for status badges
+          queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+          break;
         case "AgentStatusChanged":
           queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
           queryClient.invalidateQueries({ queryKey: ["server-status"] });
-          // Also invalidate the specific session's messages and detail
+          // When status changes (especially to completed/failed), invalidate messages and detail
           if (event.data && typeof event.data === "object") {
-            const data = event.data as { session_id?: string };
+            const data = event.data as { session_id?: string; status?: string };
             if (data.session_id) {
               queryClient.invalidateQueries({
                 queryKey: ["agent-session", data.session_id],
               });
-              queryClient.invalidateQueries({
-                queryKey: ["agent-messages", data.session_id],
-              });
+              // Only refetch messages when the session completes/fails, not during streaming
+              if (data.status === "completed" || data.status === "failed") {
+                queryClient.invalidateQueries({
+                  queryKey: ["agent-messages", data.session_id],
+                });
+              }
             }
           }
           break;
