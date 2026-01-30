@@ -3,14 +3,27 @@ use crate::db::Database;
 use crate::models::{AgentSession, AgentStatus};
 use anyhow::Result;
 use std::collections::HashMap;
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::broadcast;
+
+/// Max time to wait for a Claude subprocess (including MCP server startup).
+const SESSION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Events emitted by an agent session.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     Output { session_id: String, content: String },
     StatusChanged { session_id: String, status: AgentStatus },
+}
+
+/// Options for starting a new agent session.
+#[derive(Debug, Clone, Default)]
+pub struct SessionOptions {
+    pub working_directory: Option<String>,
+    pub dangerously_skip_permissions: bool,
 }
 
 /// Manages Claude agent subprocess sessions.
@@ -53,7 +66,11 @@ impl AgentManager {
     }
 
     /// Start a new Claude agent session.
-    pub async fn start_session(&self, prompt: &str) -> Result<AgentSession> {
+    pub async fn start_session(
+        &self,
+        prompt: &str,
+        opts: SessionOptions,
+    ) -> Result<AgentSession> {
         let running = self.db.list_agent_sessions(Some("running")).await?;
         if running.len() >= self.max_concurrent {
             anyhow::bail!(
@@ -64,7 +81,12 @@ impl AgentManager {
 
         let session = self
             .db
-            .create_agent_session(prompt, &self.default_model)
+            .create_agent_session(
+                prompt,
+                &self.default_model,
+                opts.working_directory.as_deref(),
+                opts.dangerously_skip_permissions,
+            )
             .await?;
 
         let session_id = session.id.clone();
@@ -73,6 +95,8 @@ impl AgentManager {
         let mcp_servers = self.mcp_servers.clone();
         let db = self.db.clone();
         let event_tx = self.event_tx.clone();
+        let working_directory = session.working_directory.clone();
+        let skip_permissions = session.dangerously_skip_permissions;
 
         tokio::spawn(async move {
             let result = run_claude_session(
@@ -80,6 +104,8 @@ impl AgentManager {
                 &prompt,
                 &session_id,
                 &mcp_servers,
+                working_directory.as_deref(),
+                skip_permissions,
                 &db,
                 &event_tx,
             )
@@ -103,6 +129,75 @@ impl AgentManager {
         });
 
         Ok(session)
+    }
+
+    /// Send a follow-up message to an existing session.
+    pub async fn send_message(&self, session_id: &str, content: &str) -> Result<()> {
+        let session = self
+            .db
+            .get_agent_session(session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+
+        let claude_session_id = session
+            .claude_session_id
+            .ok_or_else(|| anyhow::anyhow!("Session has no claude_session_id"))?;
+
+        // Store the user message
+        self.db
+            .add_agent_message(session_id, "user", content)
+            .await?;
+
+        // Mark session as running again
+        self.db
+            .update_agent_session_status(session_id, AgentStatus::Running)
+            .await?;
+        let _ = self.event_tx.send(AgentEvent::StatusChanged {
+            session_id: session_id.to_string(),
+            status: AgentStatus::Running,
+        });
+
+        let porter_session_id = session_id.to_string();
+        let content = content.to_string();
+        let claude_binary = self.claude_binary.clone();
+        let mcp_servers = self.mcp_servers.clone();
+        let db = self.db.clone();
+        let event_tx = self.event_tx.clone();
+        let working_directory = session.working_directory.clone();
+        let skip_permissions = session.dangerously_skip_permissions;
+
+        tokio::spawn(async move {
+            let result = resume_claude_session(
+                &claude_binary,
+                &claude_session_id,
+                &content,
+                &porter_session_id,
+                &mcp_servers,
+                working_directory.as_deref(),
+                skip_permissions,
+                &db,
+                &event_tx,
+            )
+            .await;
+
+            let final_status = match result {
+                Ok(()) => AgentStatus::Completed,
+                Err(e) => {
+                    tracing::error!(session_id = %porter_session_id, error = %e, "Agent resume failed");
+                    AgentStatus::Failed
+                }
+            };
+
+            let _ = db
+                .update_agent_session_status(&porter_session_id, final_status)
+                .await;
+            let _ = event_tx.send(AgentEvent::StatusChanged {
+                session_id: porter_session_id,
+                status: final_status,
+            });
+        });
+
+        Ok(())
     }
 
     /// List all sessions, optionally filtered by status.
@@ -153,50 +248,293 @@ fn build_mcp_config(
         .suffix(".json")
         .tempfile()?;
 
-    serde_json::to_writer(&file, &mcp_json)?;
+    // Write and flush in a block so the BufWriter is dropped before we move `file`
+    {
+        use std::io::Write;
+        let mut f = std::io::BufWriter::new(&file);
+        serde_json::to_writer(&mut f, &mcp_json)?;
+        f.flush()?;
+    }
+
+    tracing::debug!(
+        path = %file.path().display(),
+        servers = ?mcp_servers.keys().collect::<Vec<_>>(),
+        "Wrote MCP config"
+    );
 
     Ok(Some(file))
 }
 
+/// Resolve the working directory for a Claude subprocess.
+/// If an explicit directory was provided, use it. Otherwise use a fresh temp
+/// directory so Claude doesn't inherit the porter project context.
+fn resolve_working_dir(
+    explicit: Option<&str>,
+    temp_holder: &mut Option<tempfile::TempDir>,
+) -> Result<std::path::PathBuf> {
+    if let Some(dir) = explicit {
+        let path = std::path::PathBuf::from(dir);
+        if path.is_dir() {
+            return Ok(path);
+        }
+        anyhow::bail!("Working directory does not exist: {dir}");
+    }
+
+    // Create a temp directory so Claude starts in a blank state
+    let tmp = tempfile::Builder::new()
+        .prefix("porter-agent-")
+        .tempdir()?;
+    let path = tmp.path().to_path_buf();
+    *temp_holder = Some(tmp);
+    Ok(path)
+}
+
+/// Apply common flags to a Claude command: CWD, --dangerously-skip-permissions,
+/// MCP config, output format, and stdio piping.
+fn configure_cmd(
+    cmd: &mut Command,
+    cwd: &std::path::Path,
+    skip_permissions: bool,
+    mcp_config_file: &Option<tempfile::NamedTempFile>,
+) {
+    cmd.current_dir(cwd)
+        .arg("--print")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--verbose")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if skip_permissions {
+        cmd.arg("--dangerously-skip-permissions");
+    }
+
+    if let Some(ref config_file) = mcp_config_file {
+        cmd.arg("--mcp-config").arg(config_file.path());
+    }
+}
+
+/// Process streaming JSON output from a Claude subprocess line by line.
+/// Extracts assistant text content, broadcasts chunks, and returns the
+/// accumulated assistant text and (optionally) the Claude session ID.
+async fn process_stream(
+    child: &mut tokio::process::Child,
+    session_id: &str,
+    event_tx: &broadcast::Sender<AgentEvent>,
+) -> Result<(String, Option<String>)> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
+
+    let mut reader = BufReader::new(stdout).lines();
+    let mut accumulated_text = String::new();
+    let mut claude_session_id: Option<String> = None;
+
+    while let Some(line) = reader.next_line().await? {
+        let parsed: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let event_type = parsed["type"].as_str().unwrap_or("");
+
+        match event_type {
+            "system" => {
+                // Extract session_id from init event
+                if parsed["subtype"].as_str() == Some("init") {
+                    if let Some(sid) = parsed["session_id"].as_str() {
+                        claude_session_id = Some(sid.to_string());
+                    }
+                    // Log which MCP servers Claude actually connected to
+                    if let Some(servers) = parsed["mcp_servers"].as_array() {
+                        let names: Vec<&str> = servers
+                            .iter()
+                            .filter_map(|s| s.as_str())
+                            .collect();
+                        tracing::info!(
+                            session_id = %session_id,
+                            mcp_servers = ?names,
+                            "Claude session initialized"
+                        );
+                    }
+                }
+            }
+            "assistant" => {
+                // Extract text from message content blocks
+                if let Some(content) = parsed["message"]["content"].as_array() {
+                    for block in content {
+                        if block["type"].as_str() == Some("text") {
+                            if let Some(text) = block["text"].as_str() {
+                                accumulated_text.push_str(text);
+                                let _ = event_tx.send(AgentEvent::Output {
+                                    session_id: session_id.to_string(),
+                                    content: text.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            "content_block_delta" => {
+                // Streaming text deltas
+                if let Some(text) = parsed["delta"]["text"].as_str() {
+                    accumulated_text.push_str(text);
+                    let _ = event_tx.send(AgentEvent::Output {
+                        session_id: session_id.to_string(),
+                        content: text.to_string(),
+                    });
+                }
+            }
+            "result" => {
+                // Final result — use its text if we haven't accumulated any
+                if accumulated_text.is_empty() {
+                    if let Some(text) = parsed["result"].as_str() {
+                        accumulated_text = text.to_string();
+                        let _ = event_tx.send(AgentEvent::Output {
+                            session_id: session_id.to_string(),
+                            content: text.to_string(),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok((accumulated_text, claude_session_id))
+}
+
+/// Drain stderr and log it.
+async fn drain_stderr(child: &mut tokio::process::Child, session_id: &str) {
+    if let Some(mut stderr) = child.stderr.take() {
+        let mut buf = String::new();
+        if tokio::io::AsyncReadExt::read_to_string(&mut stderr, &mut buf)
+            .await
+            .is_ok()
+            && !buf.is_empty()
+        {
+            tracing::warn!(session_id = %session_id, stderr = %buf, "Claude stderr");
+        }
+    }
+}
+
+/// Run a Claude subprocess with a timeout. Kills the process if it exceeds
+/// the deadline (e.g. if an MCP server hangs during startup).
+async fn run_with_timeout(
+    child: &mut tokio::process::Child,
+    session_id: &str,
+    event_tx: &broadcast::Sender<AgentEvent>,
+) -> Result<(String, Option<String>)> {
+    match tokio::time::timeout(SESSION_TIMEOUT, process_stream(child, session_id, event_tx)).await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::error!(session_id = %session_id, "Claude session timed out, killing process");
+            let _ = child.kill().await;
+            anyhow::bail!(
+                "Session timed out after {} seconds (MCP server may have failed to start)",
+                SESSION_TIMEOUT.as_secs()
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_claude_session(
     claude_binary: &str,
     prompt: &str,
     session_id: &str,
     mcp_servers: &HashMap<String, McpServerConfig>,
+    working_directory: Option<&str>,
+    skip_permissions: bool,
     db: &Database,
     event_tx: &broadcast::Sender<AgentEvent>,
 ) -> Result<()> {
     db.add_agent_message(session_id, "user", prompt).await?;
 
     let mcp_config_file = build_mcp_config(mcp_servers)?;
+    let mut _temp_dir = None;
+    let cwd = resolve_working_dir(working_directory, &mut _temp_dir)?;
 
     let mut cmd = Command::new(claude_binary);
-    cmd.arg("--print").arg(prompt);
+    configure_cmd(&mut cmd, &cwd, skip_permissions, &mcp_config_file);
 
-    if let Some(ref config_file) = mcp_config_file {
-        cmd.arg("--mcp-config").arg(config_file.path());
+    // Append the prompt as a system prompt if MCP servers are configured,
+    // so the agent knows what tools are available via MCP.
+    if !mcp_servers.is_empty() {
+        let server_list: Vec<&str> = mcp_servers.keys().map(|s| s.as_str()).collect();
+        let system_note = format!(
+            "You have access to MCP servers: {}. Use them when relevant.",
+            server_list.join(", ")
+        );
+        cmd.arg("--append-system-prompt").arg(&system_note);
     }
 
-    let output = cmd.output().await?;
+    cmd.arg(prompt);
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    tracing::info!(
+        session_id = %session_id,
+        cwd = %cwd.display(),
+        mcp = ?mcp_servers.keys().collect::<Vec<_>>(),
+        skip_permissions,
+        "Starting Claude session"
+    );
 
-    if !stdout.is_empty() {
-        db.add_agent_message(session_id, "assistant", &stdout)
-            .await?;
-        let _ = event_tx.send(AgentEvent::Output {
-            session_id: session_id.to_string(),
-            content: stdout,
-        });
+    let mut child = cmd.spawn()?;
+    let (text, claude_sid) = run_with_timeout(&mut child, session_id, event_tx).await?;
+
+    if let Some(ref csid) = claude_sid {
+        db.set_claude_session_id(session_id, csid).await?;
     }
 
-    if !stderr.is_empty() {
-        tracing::warn!(session_id = %session_id, stderr = %stderr, "Claude stderr output");
+    drain_stderr(&mut child, session_id).await;
+    let status = child.wait().await?;
+
+    if !text.is_empty() {
+        db.add_agent_message(session_id, "assistant", &text).await?;
     }
 
-    if !output.status.success() {
-        anyhow::bail!("Claude process exited with status: {}", output.status);
+    if !status.success() {
+        anyhow::bail!("Claude process exited with status: {}", status);
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn resume_claude_session(
+    claude_binary: &str,
+    claude_session_id: &str,
+    prompt: &str,
+    session_id: &str,
+    mcp_servers: &HashMap<String, McpServerConfig>,
+    working_directory: Option<&str>,
+    skip_permissions: bool,
+    db: &Database,
+    event_tx: &broadcast::Sender<AgentEvent>,
+) -> Result<()> {
+    let mcp_config_file = build_mcp_config(mcp_servers)?;
+    let mut _temp_dir = None;
+    let cwd = resolve_working_dir(working_directory, &mut _temp_dir)?;
+
+    let mut cmd = Command::new(claude_binary);
+    cmd.arg("--resume").arg(claude_session_id);
+    configure_cmd(&mut cmd, &cwd, skip_permissions, &mcp_config_file);
+    cmd.arg(prompt);
+
+    let mut child = cmd.spawn()?;
+    let (text, _) = run_with_timeout(&mut child, session_id, event_tx).await?;
+
+    drain_stderr(&mut child, session_id).await;
+    let status = child.wait().await?;
+
+    if !text.is_empty() {
+        db.add_agent_message(session_id, "assistant", &text).await?;
+    }
+
+    if !status.success() {
+        anyhow::bail!("Claude resume exited with status: {}", status);
     }
 
     Ok(())

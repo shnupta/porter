@@ -137,23 +137,30 @@ impl Database {
         &self,
         prompt: &str,
         model: &str,
+        working_directory: Option<&str>,
+        dangerously_skip_permissions: bool,
     ) -> anyhow::Result<AgentSession> {
         let session = AgentSession {
             id: Uuid::new_v4().to_string(),
             prompt: prompt.to_string(),
             status: AgentStatus::Running,
             model: model.to_string(),
+            claude_session_id: None,
+            working_directory: working_directory.map(String::from),
+            dangerously_skip_permissions,
             started_at: Utc::now(),
             completed_at: None,
         };
 
         sqlx::query(
-            "INSERT INTO agent_sessions (id, prompt, status, model, started_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO agent_sessions (id, prompt, status, model, working_directory, dangerously_skip_permissions, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&session.id)
         .bind(&session.prompt)
         .bind(session.status.as_str())
         .bind(&session.model)
+        .bind(&session.working_directory)
+        .bind(session.dangerously_skip_permissions)
         .bind(session.started_at.to_rfc3339())
         .execute(&self.pool)
         .await?;
@@ -242,6 +249,21 @@ impl Database {
         .await?;
 
         Ok(msg)
+    }
+
+    pub async fn set_claude_session_id(
+        &self,
+        session_id: &str,
+        claude_session_id: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE agent_sessions SET claude_session_id = ? WHERE id = ?",
+        )
+        .bind(claude_session_id)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn get_agent_messages(
@@ -383,11 +405,16 @@ fn agent_session_from_row(row: &SqliteRow) -> anyhow::Result<AgentSession> {
     let completed_at: Option<String> = row.get("completed_at");
     let status_str: String = row.get("status");
 
+    let skip_perms: bool = row.try_get("dangerously_skip_permissions").unwrap_or(false);
+
     Ok(AgentSession {
         id: row.get("id"),
         prompt: row.get("prompt"),
         status: AgentStatus::from_str(&status_str).unwrap_or(AgentStatus::Running),
         model: row.get("model"),
+        claude_session_id: row.get("claude_session_id"),
+        working_directory: row.get("working_directory"),
+        dangerously_skip_permissions: skip_perms,
         started_at: chrono::DateTime::parse_from_rfc3339(&started_at)?
             .with_timezone(&Utc),
         completed_at: completed_at

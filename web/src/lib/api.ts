@@ -51,6 +51,9 @@ export interface AgentSession {
   prompt: string;
   status: "running" | "paused" | "completed" | "failed";
   model: string;
+  claude_session_id: string | null;
+  working_directory: string | null;
+  dangerously_skip_permissions: boolean;
   started_at: string;
   completed_at: string | null;
 }
@@ -120,13 +123,21 @@ export const api = {
       `/api/agents${status ? `?status=${status}` : ""}`
     ),
   getSession: (id: string) => request<AgentSession>(`/api/agents/${id}`),
-  startSession: (prompt: string) =>
+  startSession: (
+    prompt: string,
+    opts?: { directory?: string; dangerously_skip_permissions?: boolean }
+  ) =>
     request<AgentSession>("/api/agents", {
       method: "POST",
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, ...opts }),
     }),
   getMessages: (sessionId: string) =>
     request<AgentMessage[]>(`/api/agents/${sessionId}/messages`),
+  sendMessage: (sessionId: string, content: string) =>
+    request<AgentMessage>(`/api/agents/${sessionId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
 
   // Integrations
   listIntegrations: () => request<IntegrationsResponse>("/api/integrations"),

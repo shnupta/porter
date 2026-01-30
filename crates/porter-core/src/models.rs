@@ -105,6 +105,9 @@ pub struct AgentSession {
     pub prompt: String,
     pub status: AgentStatus,
     pub model: String,
+    pub claude_session_id: Option<String>,
+    pub working_directory: Option<String>,
+    pub dangerously_skip_permissions: bool,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
 }

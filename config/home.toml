@@ -13,7 +13,11 @@ default_model = "opus"
 
 # MCP servers available to Claude agent sessions.
 # Add new external integrations here — no Rust code needed.
-#
+
+[agents.mcp.fetch]
+command = "npx"
+args = ["-y", "@anthropic/mcp-server-fetch"]
+
 # [agents.mcp.dining]
 # command = "npx"
 # args = ["-y", "opentable-mcp-server"]

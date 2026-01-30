@@ -71,6 +71,39 @@ pub async fn run_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Add columns to agent_sessions (idempotent for existing DBs)
+    add_column_if_missing(pool, "agent_sessions", "claude_session_id", "TEXT").await?;
+    add_column_if_missing(pool, "agent_sessions", "working_directory", "TEXT").await?;
+    add_column_if_missing(
+        pool,
+        "agent_sessions",
+        "dangerously_skip_permissions",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+
     tracing::info!("Database migrations completed");
+    Ok(())
+}
+
+async fn add_column_if_missing(
+    pool: &SqlitePool,
+    table: &str,
+    column: &str,
+    col_type: &str,
+) -> anyhow::Result<()> {
+    let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {col_type}");
+    match sqlx::raw_sql(&sql).execute(pool).await {
+        Ok(_) => {
+            tracing::info!("Added column {column} to {table}");
+        }
+        Err(e) => {
+            // "duplicate column name" means it already exists — safe to ignore
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") {
+                return Err(e.into());
+            }
+        }
+    }
     Ok(())
 }

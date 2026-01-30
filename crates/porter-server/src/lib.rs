@@ -2,7 +2,7 @@ mod api;
 mod middleware;
 mod ws;
 
-use porter_core::agents::AgentManager;
+use porter_core::agents::{AgentEvent, AgentManager};
 use porter_core::config::PorterConfig;
 use porter_core::db::{self, Database};
 use porter_core::integrations::IntegrationRegistry;
@@ -110,6 +110,25 @@ pub async fn run_server(config: PorterConfig) -> anyhow::Result<()> {
                         tracing::error!(integration = %id, error = %e, "Tick failed");
                     }
                 }
+            }
+        });
+    }
+
+    // Forward agent events to the WebSocket broadcast channel
+    {
+        let mut agent_rx = state.agent_manager.subscribe();
+        let ws_tx = state.ws_tx.clone();
+        tokio::spawn(async move {
+            while let Ok(event) = agent_rx.recv().await {
+                let ws_event = match event {
+                    AgentEvent::Output { session_id, content } => {
+                        WsEvent::AgentOutput { session_id, content }
+                    }
+                    AgentEvent::StatusChanged { session_id, status } => {
+                        WsEvent::AgentStatusChanged { session_id, status }
+                    }
+                };
+                let _ = ws_tx.send(ws_event);
             }
         });
     }
