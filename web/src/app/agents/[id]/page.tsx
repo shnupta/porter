@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  AlertCircle,
   ArrowLeft,
   Send,
   Loader2,
@@ -308,27 +309,42 @@ export default function AgentSessionPage() {
 
 function MessageBubble({ message }: { message: AgentMessage }) {
   const isUser = message.role === "user";
+  const isError = message.role === "error";
 
   return (
     <div className="flex gap-3">
       <div
         className={cn(
           "flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
-          isUser
-            ? "bg-secondary text-secondary-foreground"
-            : "bg-primary/10 text-primary"
+          isError
+            ? "bg-destructive/10 text-destructive"
+            : isUser
+              ? "bg-secondary text-secondary-foreground"
+              : "bg-primary/10 text-primary"
         )}
       >
-        {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+        {isError ? (
+          <AlertCircle className="h-4 w-4" />
+        ) : isUser ? (
+          <User className="h-4 w-4" />
+        ) : (
+          <Bot className="h-4 w-4" />
+        )}
       </div>
       <div
         className={cn(
           "flex-1 rounded-lg px-3 py-2 text-sm",
-          isUser ? "bg-secondary/50 whitespace-pre-wrap" : "bg-muted/50 prose prose-sm dark:prose-invert max-w-none"
+          isError
+            ? "bg-destructive/10 text-destructive border border-destructive/20"
+            : isUser
+              ? "bg-secondary/50 whitespace-pre-wrap"
+              : "bg-muted/50 prose prose-sm dark:prose-invert max-w-none"
         )}
       >
         {isUser ? (
           message.content
+        ) : isError ? (
+          <span className="font-medium">{message.content}</span>
         ) : (
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
             {message.content}

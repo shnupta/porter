@@ -138,6 +138,9 @@ impl AgentManager {
                 Ok(()) => AgentStatus::Completed,
                 Err(e) => {
                     tracing::error!(session_id = %session_id, error = %e, "Agent session failed");
+                    let _ = db
+                        .add_agent_message(&session_id, "error", &e.to_string())
+                        .await;
                     AgentStatus::Failed
                 }
             };
@@ -217,6 +220,9 @@ impl AgentManager {
                 Ok(()) => AgentStatus::Completed,
                 Err(e) => {
                     tracing::error!(session_id = %porter_session_id, error = %e, "Agent resume failed");
+                    let _ = db
+                        .add_agent_message(&porter_session_id, "error", &e.to_string())
+                        .await;
                     AgentStatus::Failed
                 }
             };
@@ -429,17 +435,20 @@ async fn process_stream(
                 }
             }
             "assistant" => {
-                // Full message event (non-streaming fallback)
-                if let Some(content) = parsed["message"]["content"].as_array() {
-                    for block in content {
-                        if block["type"].as_str() == Some("text") {
-                            if let Some(text) = block["text"].as_str() {
-                                accumulated_text.push_str(text);
-                                let _ = event_tx.send(AgentEvent::Output {
-                                    session_id: session_id.to_string(),
-                                    content: text.to_string(),
-                                    content_type: "text".to_string(),
-                                });
+                // Full message event — only use as fallback when streaming
+                // didn't produce content (otherwise we'd double the text).
+                if accumulated_text.is_empty() {
+                    if let Some(content) = parsed["message"]["content"].as_array() {
+                        for block in content {
+                            if block["type"].as_str() == Some("text") {
+                                if let Some(text) = block["text"].as_str() {
+                                    accumulated_text.push_str(text);
+                                    let _ = event_tx.send(AgentEvent::Output {
+                                        session_id: session_id.to_string(),
+                                        content: text.to_string(),
+                                        content_type: "text".to_string(),
+                                    });
+                                }
                             }
                         }
                     }
@@ -518,6 +527,23 @@ async fn process_stream(
                 }
             }
             "result" => {
+                // Check for error results (e.g. failed resume)
+                if parsed["is_error"].as_bool() == Some(true) {
+                    let errors = parsed["errors"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|e| e.as_str())
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        })
+                        .unwrap_or_else(|| "Unknown error".to_string());
+                    tracing::error!(
+                        session_id = %session_id,
+                        "Claude error result: {errors}"
+                    );
+                    anyhow::bail!("{errors}");
+                }
                 // Final result — use its text if we haven't accumulated any
                 if accumulated_text.is_empty() {
                     if let Some(text) = parsed["result"].as_str() {
