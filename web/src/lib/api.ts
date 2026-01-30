@@ -131,6 +131,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ prompt, ...opts }),
     }),
+  deleteSession: (id: string) =>
+    request<void>(`/api/agents/${id}`, { method: "DELETE" }),
   getMessages: (sessionId: string) =>
     request<AgentMessage[]>(`/api/agents/${sessionId}/messages`),
   sendMessage: (sessionId: string, content: string) =>

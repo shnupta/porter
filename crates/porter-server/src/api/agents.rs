@@ -10,7 +10,7 @@ use serde::Deserialize;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/agents", get(list_sessions).post(start_session))
-        .route("/api/agents/{id}", get(get_session))
+        .route("/api/agents/{id}", get(get_session).delete(delete_session))
         .route(
             "/api/agents/{id}/messages",
             get(get_messages).post(send_message),
@@ -133,4 +133,21 @@ async fn send_message(
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok((StatusCode::OK, Json(user_msg)))
+}
+
+async fn delete_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let deleted = state
+        .agent_manager
+        .delete_session(&id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
 }

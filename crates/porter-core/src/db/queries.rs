@@ -251,6 +251,20 @@ impl Database {
         Ok(msg)
     }
 
+    pub async fn delete_agent_session(&self, id: &str) -> anyhow::Result<bool> {
+        sqlx::query("DELETE FROM agent_messages WHERE session_id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        let result = sqlx::query("DELETE FROM agent_sessions WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn set_claude_session_id(
         &self,
         session_id: &str,

@@ -17,7 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Loader2, ChevronRight, FolderOpen } from "lucide-react";
+import { Plus, Loader2, ChevronRight, FolderOpen, Trash2 } from "lucide-react";
 
 export default function AgentsPage() {
   const router = useRouter();
@@ -30,6 +30,13 @@ export default function AgentsPage() {
   const { data: sessions, isLoading } = useQuery({
     queryKey: ["agent-sessions"],
     queryFn: () => api.listSessions(),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.deleteSession(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+    },
   });
 
   const startMutation = useMutation({
@@ -154,7 +161,7 @@ export default function AgentsPage() {
           {sessions.map((session) => (
             <Card
               key={session.id}
-              className="cursor-pointer transition-colors hover:bg-accent/50"
+              className="group cursor-pointer transition-colors hover:bg-accent/50"
               onClick={() => router.push(`/agents/${session.id}`)}
             >
               <CardHeader className="pb-2">
@@ -180,6 +187,19 @@ export default function AgentsPage() {
                       )}
                       {session.status}
                     </Badge>
+                    {session.status !== "running" && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteMutation.mutate(session.id);
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
                   </div>
                 </div>

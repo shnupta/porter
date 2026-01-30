@@ -209,6 +209,11 @@ impl AgentManager {
     pub async fn get_session(&self, id: &str) -> Result<Option<AgentSession>> {
         self.db.get_agent_session(id).await
     }
+
+    /// Delete a session and its messages.
+    pub async fn delete_session(&self, id: &str) -> Result<bool> {
+        self.db.delete_agent_session(id).await
+    }
 }
 
 /// Build a temporary MCP config JSON file for the Claude CLI.
